@@ -5,17 +5,17 @@ FROM nextcloud:${NEXTCLOUD_VERSION}
 ARG NEXTCLOUD_VERSION
 
 # Debian bullseye (nextcloud:24/25 bases) is EOL: its security repository is gone from
-# deb.debian.org, so fall back to archive.debian.org when the normal install fails.
-RUN PKGS="git unzip sqlite3 libzip-dev"; \
+# deb.debian.org and archive.debian.org has no bullseye-security suite, so fall back to the
+# archived main suite only (allowing downgrades of packages the base image took from security).
+RUN PKGS="git unzip"; \
     (apt-get update && apt-get install -y --no-install-recommends $PKGS) \
     || ( . /etc/os-release \
-         && printf '%s\n' \
-              "deb http://archive.debian.org/debian ${VERSION_CODENAME} main" \
-              "deb http://archive.debian.org/debian-security ${VERSION_CODENAME}-security main" \
+         && printf '%s\n' "deb http://archive.debian.org/debian ${VERSION_CODENAME} main" \
               > /etc/apt/sources.list \
          && rm -f /etc/apt/sources.list.d/debian.sources \
          && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive \
-         && apt-get update && apt-get install -y --no-install-recommends $PKGS ); \
+         && apt-get update \
+         && apt-get install -y --no-install-recommends --allow-downgrades $PKGS ); \
     rc=$?; rm -rf /var/lib/apt/lists/*; exit $rc
 
 # The official image already ships the PHP extensions Nextcloud needs
