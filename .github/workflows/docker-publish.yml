@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [24, 25, 26, 27, 28, 29, 30, 31]
+        version: [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
     steps:
       - uses: actions/checkout@v4
 
