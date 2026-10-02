@@ -1,0 +1,73 @@
+name: Build and publish Docker images
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/charabaruk/nextcloud-docker-testing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [24, 25, 26, 27, 28, 29, 30, 31]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          echo "image=${IMAGE,,}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "${GITHUB_SHA}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: NEXTCLOUD_VERSION=${{ matrix.version }}
+          load: true
+          push: false
+          tags: ${{ steps.tags.outputs.image }}:stable${{ matrix.version }}
+          cache-from: type=gha,scope=stable${{ matrix.version }}
+          cache-to: type=gha,mode=max,scope=stable${{ matrix.version }}
+
+      - name: Smoke test
+        run: |
+          IMG=${{ steps.tags.outputs.image }}:stable${{ matrix.version }}
+          docker run --rm "$IMG" phpunit --version
+          docker run --rm "$IMG" php occ status | tee /dev/stderr | grep -E 'installed: *true'
+          docker run --rm -v "$PWD/smoke:/smoke:ro" "$IMG" \
+            phpunit --bootstrap tests/bootstrap.php /smoke/SmokeTest.php
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: NEXTCLOUD_VERSION=${{ matrix.version }}
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.image }}:stable${{ matrix.version }}
+            ${{ steps.tags.outputs.image }}:stable${{ matrix.version }}-${{ steps.tags.outputs.sha }}
+          cache-from: type=gha,scope=stable${{ matrix.version }}
