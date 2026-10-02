@@ -4,9 +4,19 @@ FROM nextcloud:${NEXTCLOUD_VERSION}
 # Re-declare after FROM so it is available in this build stage
 ARG NEXTCLOUD_VERSION
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git unzip sqlite3 libzip-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Debian bullseye (nextcloud:24/25 bases) is EOL: its security repository is gone from
+# deb.debian.org, so fall back to archive.debian.org when the normal install fails.
+RUN PKGS="git unzip sqlite3 libzip-dev"; \
+    (apt-get update && apt-get install -y --no-install-recommends $PKGS) \
+    || ( . /etc/os-release \
+         && printf '%s\n' \
+              "deb http://archive.debian.org/debian ${VERSION_CODENAME} main" \
+              "deb http://archive.debian.org/debian-security ${VERSION_CODENAME}-security main" \
+              > /etc/apt/sources.list \
+         && rm -f /etc/apt/sources.list.d/debian.sources \
+         && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive \
+         && apt-get update && apt-get install -y --no-install-recommends $PKGS ); \
+    rc=$?; rm -rf /var/lib/apt/lists/*; exit $rc
 
 # The official image already ships the PHP extensions Nextcloud needs
 # (gd, zip, pdo_sqlite, intl, apcu, ...) for the matching PHP version.
@@ -31,16 +41,23 @@ RUN find /var/www/html -mindepth 1 -delete \
 
 WORKDIR /var/www/html
 
-# Server dependencies including dev dependencies. Newer branches keep PHPUnit
-# in vendor-bin/phpunit, older ones in the root composer.json.
+# Server dependencies including dev dependencies. Branches 28+ keep PHPUnit in
+# vendor-bin/phpunit; 24-27 do not depend on PHPUnit at all, so it is installed
+# separately in /opt/phpunit.
 ENV COMPOSER_ALLOW_SUPERUSER=1
 RUN composer install --no-interaction --no-progress \
     && if [ -f vendor-bin/phpunit/composer.json ]; then \
          composer install --no-interaction --no-progress --working-dir=vendor-bin/phpunit; \
        fi \
-    && for p in vendor/bin/phpunit vendor-bin/phpunit/vendor/bin/phpunit; do \
-         if [ -e "$p" ]; then ln -sf "/var/www/html/$p" /usr/local/bin/phpunit; break; fi; \
-       done \
+    && if [ -e vendor-bin/phpunit/vendor/bin/phpunit ]; then \
+         ln -sf /var/www/html/vendor-bin/phpunit/vendor/bin/phpunit /usr/local/bin/phpunit; \
+       elif [ -e vendor/bin/phpunit ]; then \
+         ln -sf /var/www/html/vendor/bin/phpunit /usr/local/bin/phpunit; \
+       else \
+         mkdir /opt/phpunit \
+         && composer require --working-dir=/opt/phpunit --no-interaction --no-progress "phpunit/phpunit:^9.6" \
+         && ln -sf /opt/phpunit/vendor/bin/phpunit /usr/local/bin/phpunit; \
+       fi \
     && phpunit --version \
     && test -f tests/bootstrap.php
 
